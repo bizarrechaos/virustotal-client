@@ -3,9 +3,11 @@
 """vtc.py
 
 Usage:
-  vtc.py [options] init --virustotal KEY [--googl KEY]
+  vtc.py init --virustotal KEY [--googl KEY]
   vtc.py [options] report (file|hash|url|domain|ip) <resource>
   vtc.py [options] scan (file [--rescan]|url) <resource>
+  vtc.py sha256 <file>
+  vtc.py signature <file>
 
 Options:
   -a KEY, --api-key KEY   This will override the api key in the config file.
@@ -14,6 +16,7 @@ Options:
   -v, --version           Show version.
 """
 
+import binascii
 import collections
 import ConfigParser
 import hashlib
@@ -21,20 +24,50 @@ import json
 import os
 import time
 
-from docopt import docopt
+from colors import red, green, blue, bold, strip_color, underline
 from prettytable import PrettyTable
 
-import googl
+from docopt import docopt
+from googl import Googl
+from virustotal import Virustotal
 
-from virustotal import *
+
+def getsignature(path):
+    with open(path, 'rb') as f:
+        content = f.read()
+    signature = binascii.hexlify(content)[:16]
+    return ' '.join([signature[i:i+2]for i in range(0, len(signature), 2)])
 
 
 def jprint(jsondoc):
     print json.dumps(jsondoc, sort_keys=True, indent=2, separators=(',', ': '))
 
 
+def colorize(l, c):
+    if isinstance(l, str):
+        return c(str(l))
+    elif isinstance(l, list):
+        r = []
+        for i in l:
+            if isinstance(i, unicode):
+                i = i.encode('utf-8')
+                r.append(c(i))
+            elif isinstance(i, PrettyTable):
+                r.append(i)
+            else:
+                i = str(i)
+                r.append(c(i))
+        return r
+    else:
+        return l
+
+
 def gethash(path):
-    return hashlib.sha256(open(path, 'rb').read()).hexdigest()
+    try:
+        return hashlib.sha256(open(path, 'rb').read()).hexdigest()
+    except IOError:
+        print 'Cannot locate the file at: {0}'.format(path)
+        exit(1)
 
 
 def createconfig(keydict):
@@ -59,7 +92,7 @@ def readconfig(section):
 def table(data):
     try:
         googlkey = readconfig('googl')
-        g = googl.Googl(googlkey)
+        g = Googl(googlkey)
         shorten = True
     except:
         googlkey = None
@@ -74,8 +107,13 @@ def table(data):
                 metafields['MD5'] = data['md5']
                 metafields['SHA1'] = data['sha1']
                 metafields['SHA256'] = data['sha256']
-            metafields['Detection ratio'] = '{0}/{1}'.format(data['positives'],
-                                                         data['total'])
+            if int(data['positives']) > (int(data['total']) / 2):
+                c = red
+            else:
+                c = green
+            detectionratio = '{0}/{1}'.format(data['positives'],
+                                              data['total'])
+            metafields['Detection ratio'] = '{0}'.format(detectionratio)
             metafields['Analysis date'] = data['scan_date']
             metafields['Scan id'] = data['scan_id']
             if shorten:
@@ -84,15 +122,20 @@ def table(data):
                 link = data['permalink']
             metafields['Link'] = link
             for f in metafields:
-                metatable.add_row([f, metafields[f]])
+                col = green
+                if f == 'Detection ratio':
+                    col = c
+                metatable.add_row([colorize(colorize(f, blue), bold),
+                                   colorize(str(metafields[f]), col)])
             metatable.align = "l"
             metatable.header = False
             print metatable
             scans = data['scans']
-            scanstable = PrettyTable(['Engine',
-                                      'Detected',
-                                      'Result',
-                                      'Detail'])
+            scanstable = PrettyTable(colorize(colorize(['Engine',
+                                                        'Detected',
+                                                        'Result',
+                                                        'Detail'],
+                                              blue), bold))
             for key in scans.keys():
                 engine = key
                 detected = scans[key]['detected']
@@ -104,7 +147,16 @@ def table(data):
                         detail = scans[key]['detail']
                 else:
                     detail = None
-                scanstable.add_row([engine, detected, result, detail])
+                if detected:
+                    scanstable.add_row(colorize([engine,
+                                                 detected,
+                                                 result,
+                                                 detail], red))
+                else:
+                    scanstable.add_row(colorize([engine,
+                                                 detected,
+                                                 result,
+                                                 detail], green))
             scanstable.align = "l"
             print scanstable
         elif arguments['ip'] or arguments['domain']:
@@ -116,99 +168,127 @@ def table(data):
                     metafields['ASN'] = data['asn']
                     metafields['Country'] = data['country']
                     for f in metafields:
-                        metatable.add_row([f, metafields[f]])
+                        metatable.add_row([colorize(colorize(f, blue), bold),
+                                           colorize(str(metafields[f]),
+                                                    green)])
                     metatable.align = "l"
                     metatable.header = False
                     print metatable
             elif arguments['domain']:
                 headtype = 'IP address'
                 headtype2 = 'ip_address'
-                cattable = PrettyTable(['Categories'])
+                cattable = PrettyTable(colorize(colorize(['Categories'],
+                                                         blue), bold))
                 for c in data['categories']:
-                    cattable.add_row([c])
+                    cattable.add_row([colorize(str(c), green)])
                 cattable.align = "l"
                 print cattable
                 if 'WOT domain info' in data:
                     print 'WOT domain info'
-                    wottable = PrettyTable()
-                    for key in data['WOT domain info']:
-                        wottable.add_row([key, data['WOT domain info'][key]])
-                    wottable.align = "l"
-                    wottable.header = False
-                    print wottable
-                if 'webutation domain info' in data:
-                    print 'Webutation domain info'
-                    webtable = PrettyTable()
-                    for key in data['Webutation domain info']:
-                        webtable.add_row([key,
-                                          data['Webutation domain info'][key]])
-                    webtable.align = "l"
-                    webtable.header = False
-                    print webtable
+                    w = PrettyTable()
+                    for k in data['WOT domain info']:
+                        w.add_row([colorize(colorize(str(k), blue), bold),
+                                   colorize(str(data['WOT domain info'][k]),
+                                   green)])
+                    w.align = "l"
+                    w.header = False
+                    print w
                 if 'subdomains' in data:
-                    subtable = PrettyTable(['Subdomains'])
+                    subtable = PrettyTable(colorize(colorize(['Subdomains'],
+                                                             blue), bold))
                     for s in data['subdomains']:
-                        subtable.add_row([s])
+                        subtable.add_row([colorize(str(s), green)])
                     subtable.align = "l"
                     print subtable
-                whoistable = PrettyTable(['Whois lookup'])
+                whoistable = PrettyTable(colorize(colorize(['Whois lookup'],
+                                                           blue), bold))
                 whoistable.add_row([data['whois']])
                 whoistable.align = "l"
                 print whoistable
             if len(data['resolutions']) > 0:
                 print 'Resolutions {0}'.format(len(data['resolutions']))
-                restable = PrettyTable([headtype, 'Last resolved'])
+                restable = PrettyTable(colorize(colorize([headtype,
+                                                         'Last resolved'],
+                                                         blue), bold))
                 for ip in data['resolutions']:
-                    restable.add_row([ip[headtype2], ip['last_resolved']])
+                    restable.add_row(colorize([ip[headtype2],
+                                               ip['last_resolved']], green))
                 restable.align = "l"
                 print restable
             if len(data['detected_urls']) > 0:
                 print 'URLs {0}'.format(len(data['detected_urls']))
-                urltable = PrettyTable(['Analysis date',
-                                        'Detection ratio',
-                                        'URL'])
+                urltable = PrettyTable(colorize(colorize(['Analysis date',
+                                                          'Detection ratio',
+                                                          'URL'], blue), bold))
                 for u in data['detected_urls']:
                     adate = u['scan_date']
                     positives = u['positives']
                     total = u['total']
                     url = u['url']
                     ratio = '{0}/{1}'.format(positives, total)
-                    urltable.add_row([adate, ratio, url])
+                    if int(positives) > (int(total) / 2):
+                        c = red
+                    else:
+                        c = green
+                    urltable.add_row(colorize([adate, ratio, url], c))
                 urltable.align = "l"
                 print urltable
             if 'detected_referrer_samples' in data:
-                print 'Detected referrer samples {0}'.format(len(data['detected_referrer_samples']))
-                dreftable = PrettyTable(['SHA256', 'Detection ratio'])
+                print 'Detected referrer samples {0}'.format(
+                      len(data['detected_referrer_samples']))
+                dreftable = PrettyTable(colorize(colorize(['SHA256',
+                                                           'Detection ratio'],
+                                                 blue), bold))
                 for dref in data['detected_referrer_samples']:
                     positives = dref['positives']
                     total = dref['total']
                     ratio = '{0}/{1}'.format(positives, total)
                     shahash = dref['sha256']
-                    dreftable.add_row([shahash, ratio])
+                    if int(positives) > (int(total) / 2):
+                        c = red
+                    else:
+                        c = green
+                    dreftable.add_row(colorize([shahash, ratio], c))
                 dreftable.align = "l"
                 print dreftable
             if 'detected_downloaded_samples' in data:
-                print 'Detected downloaded samples {0}'.format(len(data['detected_downloaded_samples']))
-                ddowntable = PrettyTable(['Analysis date', 'SHA256', 'Detection ratio'])
+                print 'Detected downloaded samples {0}'.format(
+                      len(data['detected_downloaded_samples']))
+                ddowntable = PrettyTable(colorize(colorize(['Analysis date',
+                                                            'SHA256',
+                                                            'Detection ratio'],
+                                                  blue), bold))
                 for ddown in data['detected_downloaded_samples']:
                     adate = ddown['date']
                     positives = ddown['positives']
                     total = ddown['total']
                     ratio = '{0}/{1}'.format(positives, total)
                     shahash = ddown['sha256']
-                    ddowntable.add_row([adate, shahash, ratio])
+                    if int(positives) > (int(total) / 2):
+                        c = red
+                    else:
+                        c = green
+                    ddowntable.add_row(colorize([adate, shahash, ratio], c))
                 ddowntable.align = "l"
                 print ddowntable
             if 'detected_communicating_samples' in data:
-                print 'Detected communicating samples {0}'.format(len(data['detected_communicating_samples']))
-                dcommtable = PrettyTable(['Analysis date', 'SHA256', 'Detection ratio'])
+                print 'Detected communicating samples {0}'.format(
+                      len(data['detected_communicating_samples']))
+                dcommtable = PrettyTable(colorize(colorize(['Analysis date',
+                                                            'SHA256',
+                                                            'Detection ratio'],
+                                                  blue), bold))
                 for dcomm in data['detected_communicating_samples']:
                     adate = dcomm['date']
                     positives = dcomm['positives']
                     total = dcomm['total']
                     ratio = '{0}/{1}'.format(positives, total)
                     shahash = dcomm['sha256']
-                    dcommtable.add_row([adate, shahash, ratio])
+                    if int(positives) > (int(total) / 2):
+                        c = red
+                    else:
+                        c = green
+                    dcommtable.add_row(colorize([adate, shahash, ratio], c))
                 dcommtable.align = "l"
                 print dcommtable
     elif arguments['scan'] and not arguments['--rescan']:
@@ -225,7 +305,8 @@ def table(data):
             link = data['permalink']
         metafields['Link'] = link
         for f in metafields:
-            metatable.add_row([f, metafields[f]])
+            metatable.add_row([colorize(colorize(f, blue), bold),
+                               colorize(str(metafields[f]), green)])
         metatable.align = "l"
         metatable.header = False
         print metatable
@@ -295,10 +376,14 @@ def main(a):
                     output(vtc.rscSubmit(a['<resource>']))
             elif a['url']:
                 output(vtc.scanURL(a['<resource>']))
+        elif a['sha256']:
+            print gethash(a['<file>'])
+        elif a['signature']:
+            print getsignature(a['<file>'])
         else:
             exit(1)
 
 
 if __name__ == '__main__':
-    arguments = docopt(__doc__, version='vtc.py 0.1b')
+    arguments = docopt(__doc__, version='vtc.py 1.0')
     main(arguments)
