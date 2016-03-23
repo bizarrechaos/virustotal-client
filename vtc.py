@@ -8,6 +8,7 @@ Usage:
   vtc.py [options] scan (file [--rescan]|url) <resource>
   vtc.py sha256 <file>
   vtc.py signature <file>
+  vtc.py hexdump <file>
 
 Options:
   -a KEY, --api-key KEY   This will override the api key in the config file.
@@ -28,6 +29,7 @@ from colors import red, green, blue, bold, strip_color, underline
 from prettytable import PrettyTable
 
 from docopt import docopt
+from hexdump import hexdump
 from googl import Googl
 from virustotal import Virustotal
 
@@ -37,6 +39,13 @@ def getsignature(path):
         content = f.read()
     signature = binascii.hexlify(content)[:16]
     return ' '.join([signature[i:i+2]for i in range(0, len(signature), 2)])
+
+
+def dumphex(path):
+    with open(path, 'rb') as f:
+        content = f.read()
+    hex = binascii.hexlify(content)
+    hexdump(hex)
 
 
 def jprint(jsondoc):
@@ -380,6 +389,8 @@ def main(a):
             print gethash(a['<file>'])
         elif a['signature']:
             print getsignature(a['<file>'])
+        elif a['hexdump']:
+            print dumphex(a['<file>'])
         else:
             exit(1)
 
