@@ -45,7 +45,7 @@ def dumphex(path):
     with open(path, 'rb') as f:
         content = f.read()
     hex = binascii.hexlify(content)
-    hexdump(hex)
+    return hexdump(hex, result='return')
 
 
 def jprint(jsondoc):
